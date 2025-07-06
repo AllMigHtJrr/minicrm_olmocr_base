@@ -1,0 +1,65 @@
+[
+  {
+    "id": 1,
+    "name": "Sarah Johnson",
+    "email": "sarah.johnson@techcorp.com",
+    "phone": "+1 (555) 123-4567",
+    "status": "New",
+    "source": "Manual",
+    "created_at": "2024-01-15T10:30:00"
+  },
+  {
+    "id": 2,
+    "name": "Michael Chen",
+    "email": "m.chen@innovatetech.com",
+    "phone": "+1 (555) 234-5678",
+    "status": "Contacted",
+    "source": "Document",
+    "created_at": "2024-01-14T14:20:00"
+  },
+  {
+    "id": 3,
+    "name": "Emily Rodriguez",
+    "email": "emily.r@startupventures.com",
+    "phone": "+1 (555) 345-6789",
+    "status": "New",
+    "source": "Manual",
+    "created_at": "2024-01-13T09:15:00"
+  },
+  {
+    "id": 4,
+    "name": "Vineeth Kumar",
+    "email": "vineethkumar2k5@gmail.com",
+    "phone": "7416765502",
+    "status": "Contacted",
+    "source": "Manual",
+    "created_at": "2025-07-05T18:01:23.301978"
+  },
+  {
+    "id": 5,
+    "name": "Steve Harrington",
+    "email": "yourfriendsteve@hawkins.com",
+    "phone": "7416765502",
+    "status": "Contacted",
+    "source": "Manual",
+    "created_at": "2025-07-05T19:20:35.009086"
+  },
+  {
+    "id": 6,
+    "name": "Jim Hopper",
+    "email": "hoppergoesdatewithjoyce@hawkins.com",
+    "phone": "12342526114",
+    "status": "New",
+    "source": "Manual",
+    "created_at": "2025-07-06T04:15:40.871335"
+  },
+  {
+    "id": 7,
+    "name": "Eleven Byers",
+    "email": "mike@gmail.com",
+    "phone": "7416765502",
+    "status": "New",
+    "source": "Manual",
+    "created_at": "2025-07-06T15:28:27.913190"
+  }
+]

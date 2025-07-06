@@ -1,0 +1,44 @@
+{
+  "workflows": [
+    {
+      "id": "workflow-1",
+      "name": "Default Lead Follow-up",
+      "description": "Automated follow-up workflow for new leads",
+      "nodes": [
+        {
+          "id": "trigger-1",
+          "type": "trigger",
+          "position": {"x": 100, "y": 100},
+          "data": {"label": "Lead Created"}
+        },
+        {
+          "id": "action-1",
+          "type": "action",
+          "position": {"x": 300, "y": 100},
+          "data": {"label": "Send Welcome Email"}
+        },
+        {
+          "id": "action-2",
+          "type": "action",
+          "position": {"x": 500, "y": 100},
+          "data": {"label": "Update Status to Contacted"}
+        }
+      ],
+      "edges": [
+        {
+          "id": "edge-1",
+          "source": "trigger-1",
+          "target": "action-1"
+        },
+        {
+          "id": "edge-2",
+          "source": "action-1",
+          "target": "action-2"
+        }
+      ],
+      "created_at": "2024-01-15T10:00:00",
+      "updated_at": "2024-01-15T10:00:00"
+    }
+  ],
+  "last_updated": "2024-01-15T10:00:00"
+} 
