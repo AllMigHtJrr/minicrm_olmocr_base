@@ -1,16 +1,22 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, BackgroundTasks
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import json
 import aiofiles
 from datetime import datetime
-import uuid
 from typing import List, Dict, Any
 import logging
 from PIL import Image
 import io
 import re
 from contextlib import asynccontextmanager
+import httpx
+import asyncio
+from dotenv import load_dotenv
+import os
+
+# Load environment variables from .env file
+load_dotenv()
 
 from models import (
     LeadCreate, LeadResponse, LeadStatusUpdate, LeadInteraction, 
@@ -19,10 +25,11 @@ from models import (
 )
 from utils import (
     validate_email, extract_email_from_text, extract_name_from_text,
-    save_uploaded_file, cleanup_temp_file, olmocr_extraction,
+    save_uploaded_file, cleanup_temp_file, tesseract_ocr,
     validate_workflow_structure, get_workflow_action_description,
     sanitize_text, generate_unique_id, OLM_OCR_AVAILABLE
 )
+from email_service import email_service
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -72,19 +79,8 @@ async def save_workflows_to_file():
 async def lifespan(app: FastAPI):
     # Startup
     await load_data_from_files()
-    
-    # Check OLM OCR availability
-    if not OLM_OCR_AVAILABLE:
-        logger.warning("⚠️ OLM OCR libraries not available. Document processing will not work.")
-        logger.warning("Install OLM OCR libraries: pip install transformers torch pdf2image opencv-python accelerate")
-    else:
-        logger.info("✅ OLM OCR libraries available. Document processing enabled.")
-        logger.info("🔄 OLM OCR model (allenai/olmOCR-7B-0225-preview) will be loaded on first document upload...")
-    
-    logger.info("Mini CRM API with Agentic AI started successfully")
-    
+    logger.info("Mini CRM API started successfully")
     yield
-    
     # Shutdown
     logger.info("Mini CRM API shutting down...")
 
@@ -98,11 +94,17 @@ app = FastAPI(
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:4028"],
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:4028", "http://127.0.0.1:4028"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Test endpoint for CORS debugging
+@app.get("/test-cors")
+async def test_cors():
+    """Test endpoint to verify CORS is working"""
+    return {"message": "CORS is working!", "timestamp": datetime.now().isoformat()}
 
 # Enhanced Lead Management Endpoints
 
@@ -131,12 +133,17 @@ async def create_lead_manual(lead: LeadCreate):
     await save_leads_to_file()
     logger.info(f"Created new lead with agentic validation: {new_lead['name']}")
     
+    # Trigger workflows for new lead
+    try:
+        await trigger_lead_created_workflow(new_lead)
+    except Exception as e:
+        logger.error(f"Failed to trigger workflows for new lead: {e}")
+    
     return LeadResponse(**new_lead)
 
 @app.post("/leads/document", response_model=DocumentExtractionResponse)
 async def create_lead_from_document(file: UploadFile = File(...)):
-    """Extract lead information from uploaded document using OLM OCR"""
-    
+    """Extract lead information from uploaded document using Tesseract OCR"""
     # Validate file type
     allowed_extensions = ('.pdf', '.png', '.jpg', '.jpeg')
     if not file.filename.lower().endswith(allowed_extensions):
@@ -144,87 +151,41 @@ async def create_lead_from_document(file: UploadFile = File(...)):
             status_code=400, 
             detail=f"Only {', '.join(allowed_extensions)} files are supported"
         )
-    
-    # Check OLM OCR availability
-    if not OLM_OCR_AVAILABLE:
-        raise HTTPException(
-            status_code=503,
-            detail="OLM OCR processing is not available. Please install OLM OCR libraries: pip install transformers torch pdf2image opencv-python accelerate"
-        )
-    
     temp_file_path = None
     try:
         # Read file content
         content = await file.read()
-        
         # Save file temporarily
         temp_file_path = await save_uploaded_file(content, file.filename)
-        
-        # Use OLM OCR for extraction
-        extracted_data = olmocr_extraction(content, file.filename)
-        
-        # Check for OLM OCR errors
+        # Use Tesseract OCR for extraction
+        extracted_data = tesseract_ocr(content, file.filename)
         if "error" in extracted_data:
-            raise HTTPException(
-                status_code=422,
-                detail=f"OLM OCR processing failed: {extracted_data['error']}"
-            )
+            raise HTTPException(status_code=500, detail=f"Tesseract OCR failed: {extracted_data['error']}")
         
-        # Validate extracted data
-        if not extracted_data.get("name") or extracted_data["name"] == "Name Not Found":
-            logger.warning("No name found in document")
-            extracted_data["name"] = "Name Not Found"
+        # Create lead from extracted data
+        global next_id
+        new_lead = {
+            "id": next_id,
+            "name": extracted_data["name"],
+            "email": extracted_data["email"],
+            "phone": extracted_data["phone"],
+            "status": extracted_data.get("status", "New"),
+            "source": extracted_data["source"],
+            "created_at": datetime.now().isoformat()
+        }
         
-        if not extracted_data.get("email") or extracted_data["email"] == "email@not.found":
-            logger.warning("No email found in document")
-            extracted_data["email"] = "email@not.found"
+        leads_data.append(new_lead)
+        next_id += 1
+        await save_leads_to_file()
         
-        if not extracted_data.get("phone") or extracted_data["phone"] == "Phone Not Found":
-            logger.warning("No phone found in document")
-            extracted_data["phone"] = "Phone Not Found"
+        # Trigger workflows for new lead
+        try:
+            await trigger_lead_created_workflow(new_lead)
+        except Exception as e:
+            logger.error(f"Failed to trigger workflows for new lead: {e}")
         
-        # Calculate confidence based on what was found
-        found_fields = sum(1 for field in ['name', 'email', 'phone'] 
-                          if extracted_data.get(field) and 
-                          extracted_data[field] not in ['Name Not Found', 'email@not.found', 'Phone Not Found'])
-        confidence = found_fields / 3.0
-        
-        # Create extraction notes
-        extraction_notes = []
-        if extracted_data.get("raw_text"):
-            extraction_notes.append(f"OLM OCR extracted {len(extracted_data['raw_text'])} characters")
-        if confidence < 1.0:
-            missing_fields = []
-            if extracted_data["name"] == "Name Not Found":
-                missing_fields.append("name")
-            if extracted_data["email"] == "email@not.found":
-                missing_fields.append("email")
-            if extracted_data["phone"] == "Phone Not Found":
-                missing_fields.append("phone")
-            extraction_notes.append(f"Missing fields: {', '.join(missing_fields)}")
-        
-        # Create response
-        response = DocumentExtractionResponse(
-            name=extracted_data["name"],
-            email=extracted_data["email"],
-            phone=extracted_data["phone"],
-            status=LeadStatus.NEW,
-            source=LeadSource.DOCUMENT,
-            confidence=confidence,
-            extraction_notes="; ".join(extraction_notes) if extraction_notes else "OLM OCR extraction successful"
-        )
-        
-        logger.info(f"OLM OCR extracted lead from document: {response.name} (confidence: {confidence:.2f})")
-        return response
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error processing document: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error processing document: {str(e)}")
-    
+        return DocumentExtractionResponse(**extracted_data)
     finally:
-        # Clean up temporary file
         if temp_file_path:
             await cleanup_temp_file(temp_file_path)
 
@@ -275,51 +236,68 @@ async def update_lead_status(lead_id: int, status_update: LeadStatusUpdate):
 
 @app.post("/interact", response_model=InteractionResponse)
 async def interact_with_lead(interaction: LeadInteraction):
-    """Enhanced interaction with a lead using LLM with context awareness"""
-    
+    """Enhanced interaction with a lead using LLM (Ollama) as a CRM assistant"""
     # Find the lead
     lead = None
     for l in leads_data:
         if l["id"] == interaction.id:
             lead = l
             break
-    
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
     
-    # Sanitize prompt
-    prompt = sanitize_text(interaction.prompt).lower()
-    
-    # Enhanced LLM responses with context awareness
-    if "follow-up" in prompt:
-        reply = f"Email {lead['name']} at {lead['email']} for follow-up. Current status: {lead['status']}"
-    elif "details" in prompt:
-        reply = f"Name: {lead['name']}, Email: {lead['email']}, Phone: {lead['phone']}, Status: {lead['status']}, Source: {lead['source']}"
-    elif "contact" in prompt:
-        reply = f"Contact {lead['name']} at {lead['phone']} or {lead['email']}. Best time to reach: Business hours"
-    elif "status" in prompt:
-        reply = f"Current status of {lead['name']}: {lead['status']}. Last updated: {lead.get('created_at', 'Unknown')}"
-    elif "source" in prompt:
-        reply = f"{lead['name']} was added via {lead['source']} method"
-    elif "next" in prompt or "action" in prompt:
-        if lead['status'] == 'New':
-            reply = f"Next action for {lead['name']}: Send welcome email and schedule initial call"
-        else:
-            reply = f"Next action for {lead['name']}: Follow up on previous contact and assess interest"
-    else:
-        reply = f"Ask about follow-up, details, contact, status, source, or next actions for {lead['name']}."
-    
-    # Include lead context in response
-    lead_context = {
+    try:
+        # Compose the prompt for the LLM as a CRM assistant
+        user_prompt = interaction.prompt
+        lead_context = f"Lead info: Name: {lead['name']}, Email: {lead['email']}, Phone: {lead['phone']}, Status: {lead['status']}, Source: {lead['source']}"
+        
+        # Create a system prompt that makes the LLM act as a CRM assistant
+        system_prompt = """You are a helpful CRM assistant that helps sales teams manage their leads effectively. 
+        You provide advice on lead management, follow-up strategies, and CRM best practices. 
+        You are NOT the lead - you are an assistant helping the user manage this lead.
+        
+        When responding:
+        - Provide actionable advice for lead management
+        - Suggest follow-up strategies based on the lead's status
+        - Recommend next steps for the sales process
+        - Give tips on how to engage with this specific lead
+        - Be helpful and professional
+        """
+        
+        full_prompt = f"{system_prompt}\n\nLead Context: {lead_context}\n\nUser Question: {user_prompt}\n\nAssistant Response:"
+        
+        # Call Ollama LLM
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "http://localhost:11434/api/generate",
+                json={
+                    "model": "llama2",  # Change to your preferred Ollama model
+                    "prompt": full_prompt,
+                    "stream": False
+                },
+                timeout=60
+            )
+            response.raise_for_status()
+            data = response.json()
+            llm_reply = data.get("response") or data.get("message") or "[No response from LLM]"
+        
+        return {
+            "reply": llm_reply,
+            "lead_context": {
         "id": lead["id"],
         "name": lead["name"],
         "status": lead["status"],
         "source": lead["source"]
     }
-    
-    logger.info(f"LLM interaction for lead {lead['name']}: {interaction.prompt}")
-    
-    return InteractionResponse(reply=reply, lead_context=lead_context)
+        }
+        
+    except httpx.ConnectError:
+        raise HTTPException(status_code=503, detail="Ollama server is not running. Please start Ollama first.")
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=408, detail="Request to Ollama timed out. Please try again.")
+    except Exception as e:
+        logger.error(f"Error calling Ollama: {e}")
+        raise HTTPException(status_code=500, detail=f"Error processing request: {str(e)}")
 
 # Enhanced Workflow Designer with React Flow Support
 
@@ -331,8 +309,8 @@ async def execute_workflow(workflow: WorkflowRequest):
     
     # Validate workflow structure
     is_valid, validation_message = validate_workflow_structure(
-        [node.dict() for node in workflow.nodes],
-        [edge.dict() for edge in workflow.edges]
+        [node.model_dump() for node in workflow.nodes],
+        [edge.model_dump() for edge in workflow.edges]
     )
     
     if not is_valid:
@@ -341,7 +319,7 @@ async def execute_workflow(workflow: WorkflowRequest):
     execution_log = []
     workflow_id = f"workflow-{generate_unique_id()}"
     
-    # Simulate workflow execution by logging node actions
+    # Simulate workflow execution by logging node actions and performing real actions
     for node in workflow.nodes:
         node_type = node.type
         node_data = node.data
@@ -351,8 +329,44 @@ async def execute_workflow(workflow: WorkflowRequest):
             logger.info(action_desc)
             execution_log.append(f"[{datetime.now().isoformat()}] {action_desc}")
             
-        elif node_type == "action":
-            action_desc = get_workflow_action_description(node_data)
+        elif node_type == "sendEmail":
+            # Send real email using SendGrid
+            email_subject = node_data.get('emailSubject', 'Welcome to our CRM')
+            email_template = node_data.get('emailTemplate', 'Thank you for your interest!')
+            sender_name = node_data.get('senderName', 'CRM System')
+            
+            # For workflow execution, we need lead data - use test data
+            test_lead_data = {
+                "name": "Test Lead",
+                "email": "test@example.com"
+            }
+            
+            email_config = {
+                "emailSubject": email_subject,
+                "emailTemplate": email_template,
+                "senderName": sender_name
+            }
+            
+            # Send the email
+            email_result = email_service.send_welcome_email(test_lead_data, email_config)
+            
+            if email_result["success"]:
+                action_desc = f"Send Email: {email_subject} from {sender_name} - SUCCESS"
+                logger.info(action_desc)
+                execution_log.append(f"[{datetime.now().isoformat()}] {action_desc}")
+                execution_log.append(f"[{datetime.now().isoformat()}] Email sent to: {test_lead_data['email']}")
+            else:
+                action_desc = f"Send Email: {email_subject} from {sender_name} - FAILED"
+                logger.error(action_desc)
+                execution_log.append(f"[{datetime.now().isoformat()}] {action_desc}")
+                execution_log.append(f"[{datetime.now().isoformat()}] Error: {email_result['message']}")
+            
+        elif node_type == "updateStatus":
+            # Simulate updating lead status
+            new_status = node_data.get('status', 'Contacted')
+            update_reason = node_data.get('updateReason', 'Workflow automation')
+            
+            action_desc = f"Update Status: {new_status} - {update_reason}"
             logger.info(action_desc)
             execution_log.append(f"[{datetime.now().isoformat()}] {action_desc}")
             
@@ -372,8 +386,8 @@ async def execute_workflow(workflow: WorkflowRequest):
         "id": workflow_id,
         "name": workflow.name,
         "description": workflow.description,
-        "nodes": [node.dict() for node in workflow.nodes],
-        "edges": [edge.dict() for edge in workflow.edges],
+        "nodes": [node.model_dump() for node in workflow.nodes],
+        "edges": [edge.model_dump() for edge in workflow.edges],
         "created_at": datetime.now().isoformat(),
         "updated_at": datetime.now().isoformat()
     }
@@ -386,6 +400,105 @@ async def execute_workflow(workflow: WorkflowRequest):
         workflow_id=workflow_id,
         execution_log=execution_log
     )
+
+@app.post("/workflow/trigger-lead-created")
+async def trigger_lead_created_workflow(lead_data: dict):
+    """Trigger workflow when a new lead is created"""
+    logger.info(f"Triggering workflow for new lead: {lead_data.get('name', 'Unknown')}")
+    
+    # Find workflows that start with "Lead Created" trigger
+    triggered_workflows = []
+    
+    for workflow in workflows_data["workflows"]:
+        # Check if workflow has a trigger node
+        trigger_nodes = [node for node in workflow["nodes"] if node.get("data", {}).get("type") == "trigger"]
+        
+        if trigger_nodes:
+            # Execute the workflow with lead data
+            execution_log = []
+            workflow_id = workflow["id"]
+            
+            logger.info(f"Executing workflow {workflow_id} for new lead")
+            execution_log.append(f"[{datetime.now().isoformat()}] Triggered workflow: {workflow['name']}")
+            execution_log.append(f"[{datetime.now().isoformat()}] Lead: {lead_data.get('name')} ({lead_data.get('email')})")
+            
+            # Process workflow nodes
+            for node in workflow["nodes"]:
+                node_type = node.get("data", {}).get("type")
+                node_data = node.get("data", {})
+                
+                if node_type == "sendEmail":
+                    # Send real welcome email using SendGrid
+                    email_subject = node_data.get('emailSubject', 'Welcome to our CRM')
+                    email_template = node_data.get('emailTemplate', 'Thank you for your interest!')
+                    sender_name = node_data.get('senderName', 'CRM System')
+                    
+                    email_config = {
+                        "emailSubject": email_subject,
+                        "emailTemplate": email_template,
+                        "senderName": sender_name
+                    }
+                    
+                    # Send the email using real lead data
+                    email_result = email_service.send_welcome_email(lead_data, email_config)
+                    
+                    if email_result["success"]:
+                        action_desc = f"Send Welcome Email: {email_subject} to {lead_data.get('email')} - SUCCESS"
+                        logger.info(action_desc)
+                        execution_log.append(f"[{datetime.now().isoformat()}] {action_desc}")
+                        execution_log.append(f"[{datetime.now().isoformat()}] Email sent successfully")
+                    else:
+                        action_desc = f"Send Welcome Email: {email_subject} to {lead_data.get('email')} - FAILED"
+                        logger.error(action_desc)
+                        execution_log.append(f"[{datetime.now().isoformat()}] {action_desc}")
+                        execution_log.append(f"[{datetime.now().isoformat()}] Error: {email_result['message']}")
+                    
+                elif node_type == "updateStatus":
+                    # Update lead status
+                    new_status = node_data.get('status', 'Contacted')
+                    update_reason = node_data.get('updateReason', 'Workflow automation')
+                    
+                    # Find and update the lead
+                    for lead in leads_data:
+                        if lead["id"] == lead_data.get("id"):
+                            lead["status"] = new_status
+                            await save_leads_to_file()
+                            break
+                    
+                    action_desc = f"Updated lead status to: {new_status} - {update_reason}"
+                    logger.info(action_desc)
+                    execution_log.append(f"[{datetime.now().isoformat()}] {action_desc}")
+            
+            triggered_workflows.append({
+                "workflow_id": workflow_id,
+                "workflow_name": workflow["name"],
+                "execution_log": execution_log
+            })
+    
+    return {
+        "message": f"Triggered {len(triggered_workflows)} workflows for new lead",
+        "triggered_workflows": triggered_workflows,
+        "lead_data": lead_data
+    }
+
+@app.post("/test-workflow")
+async def test_workflow_trigger():
+    """Test endpoint to manually trigger workflows"""
+    test_lead = {
+        "id": 999,
+        "name": "Test Lead",
+        "email": "test@example.com",
+        "phone": "123-456-7890",
+        "status": "New",
+        "source": "Manual",
+        "created_at": datetime.now().isoformat()
+    }
+    
+    result = await trigger_lead_created_workflow(test_lead)
+    return {
+        "message": "Test workflow triggered",
+        "result": result
+    }
 
 @app.get("/workflows")
 async def get_workflows():
@@ -433,7 +546,7 @@ async def root():
         "version": "2.0.0",
         "features": [
             "Enhanced Lead Management with Validation",
-            "OLM OCR Document Processing (allenai/olmOCR-7B-0225-preview)",
+            "Tesseract OCR Document Processing",
             "Agentic LLM Interactions",
             "React Flow Workflow Designer",
             "Workflow Persistence and Execution"

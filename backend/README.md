@@ -1,11 +1,11 @@
 # Mini CRM Backend API - Agentic AI Edition
 
-A FastAPI backend for the Mini CRM application with advanced agentic AI features, enhanced lead management, document processing with OlmOCR, intelligent LLM interactions, and React Flow workflow automation.
+A FastAPI backend for the Mini CRM application with advanced agentic AI features, enhanced lead management, document processing with Tesseract OCR, intelligent LLM interactions, and React Flow workflow automation.
 
 ## 🚀 Enhanced Features
 
 - **🧾 Agentic Lead Management**: Create, read, update, and delete leads with intelligent validation
-- **📄 OlmOCR Document Processing**: Extract lead information from PDF and image files using AI-powered OCR
+- **📄 Tesseract OCR Document Processing**: Extract lead information from PDF and image files using Tesseract OCR
 - **🤖 Enhanced LLM Integration**: Context-aware AI-powered lead interaction and assistance
 - **🔁 React Flow Workflow Designer**: Visual workflow builder with node execution and persistence
 - **✅ Advanced Validation**: Email validation, input sanitization, and error handling
@@ -13,10 +13,14 @@ A FastAPI backend for the Mini CRM application with advanced agentic AI features
 - **🔄 CORS Support**: Compatible with React frontend
 - **💾 Data Persistence**: JSON file storage with in-memory caching
 
-## 📋 Prerequisites
+## �� Prerequisites
 
-- Python 3.8 or higher
-- pip (Python package installer)
+### System Requirements
+- **Python 3.11+**
+- **Node.js 16+**
+- **Tesseract OCR** (must be installed and in PATH)
+- **RAM**: 16GB+ (32GB+ recommended)
+- **Storage**: 20GB+ free space
 
 ## 🛠️ Installation
 
@@ -46,6 +50,10 @@ A FastAPI backend for the Mini CRM application with advanced agentic AI features
    ```bash
    pip install -r requirements.txt
    ```
+
+#### Install Tesseract Binary
+- **Windows:** Download and install from https://github.com/tesseract-ocr/tesseract/wiki
+- **Linux:** `sudo apt install tesseract-ocr`
 
 ## 🏃‍♂️ Running the Server
 
@@ -80,7 +88,7 @@ Content-Type: application/json
 - Input sanitization
 - Automatic status and source assignment
 
-#### 2. Create Lead from Document (OlmOCR)
+#### 2. Create Lead from Document (Tesseract OCR)
 ```http
 POST /leads/document
 Content-Type: multipart/form-data
@@ -89,7 +97,7 @@ file: [PDF or Image file]
 ```
 
 **Features:**
-- OlmOCR integration (allenai/olmOCR-7B-0225-preview)
+- Tesseract OCR integration
 - Email validation and fallback
 - Confidence scoring
 - Extraction notes
@@ -264,7 +272,7 @@ GET /
 }
 ```
 
-### 2. Upload Document with OlmOCR
+### 2. Upload Document with Tesseract OCR
 - **Method**: POST
 - **URL**: `http://localhost:8000/leads/document`
 - **Body**: Form-data with file upload
@@ -337,7 +345,7 @@ backend/
 }
 ```
 
-### Document Extraction Response (OlmOCR)
+### Document Extraction Response (Tesseract OCR)
 ```json
 {
   "name": "Sarah Johnson",
@@ -416,7 +424,7 @@ Error responses include detailed information:
 ### Logs
 The API logs all operations with enhanced detail:
 - Lead creation with validation results
-- OlmOCR processing steps
+- Tesseract OCR processing steps
 - LLM interaction context
 - Workflow execution logs
 
@@ -440,3 +448,19 @@ This enhanced backend is designed to work seamlessly with the React frontend. Th
 ---
 
 **Happy coding with Agentic AI! 🚀🤖** 
+
+## 🔄 Tesseract OCR Integration
+
+### AI-Powered OCR
+- **Tesseract OCR Integration**: Uses Tesseract for document text extraction
+- **Multi-format Support**: PDF, PNG, JPG, JPEG
+- **Fast Processing**: Optimized for speed with memory management
+
+#### Test Tesseract OCR Setup
+```bash
+python
+>>> import pytesseract
+>>> from PIL import Image
+>>> img = Image.open('resume_optimized.png')
+>>> print(pytesseract.image_to_string(img))
+``` 

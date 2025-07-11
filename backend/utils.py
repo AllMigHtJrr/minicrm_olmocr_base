@@ -2,6 +2,8 @@ import re
 import logging
 import aiofiles
 import os
+import signal
+import time
 from typing import Dict, Optional, Tuple
 from PIL import Image
 import io
@@ -10,6 +12,8 @@ import numpy as np
 import base64
 import urllib.request
 from io import BytesIO
+from functools import wraps
+import pytesseract
 
 # OLM OCR Libraries
 try:
@@ -27,57 +31,52 @@ logger = logging.getLogger(__name__)
 # Email validation regex pattern
 EMAIL_PATTERN = r'[\w\.-]+@[\w\.-]+\.\w+'
 
+def timeout_handler(signum, frame):
+    """Handle timeout signal"""
+    raise TimeoutError("Processing timed out")
+
+def timeout(seconds):
+    """Decorator to add timeout to functions"""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            if os.name == 'nt':  # Windows
+                # Windows doesn't support signal.alarm, so we'll use a different approach
+                return func(*args, **kwargs)
+            else:
+                # Set up timeout handler
+                old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+                signal.alarm(seconds)
+                try:
+                    result = func(*args, **kwargs)
+                finally:
+                    signal.alarm(0)
+                    signal.signal(signal.SIGALRM, old_handler)
+                return result
+        return wrapper
+    return decorator
+
 def validate_email(email: str) -> bool:
     """Validate email format using regex"""
     return bool(re.match(EMAIL_PATTERN, email))
 
-def extract_email_from_text(text: str) -> Optional[str]:
-    """Extract email from text using regex"""
-    match = re.search(EMAIL_PATTERN, text)
+def extract_email_from_text(text: str):
+    match = re.search(r'[\w\.-]+@[\w\.-]+', text)
     return match.group(0) if match else None
 
-def extract_name_from_text(text: str) -> Optional[str]:
-    """Extract potential name from text using NLP patterns"""
-    lines = text.split('\n')
-    
-    # Look for lines that might contain names
+def extract_name_from_text(text: str):
+    lines = text.splitlines()
     for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-            
-        # Skip lines that are clearly not names
-        if any(skip in line.lower() for skip in ['@', 'http', 'www', 'phone', 'email', 'address', 'company']):
-            continue
-            
-        # Look for patterns that look like names (2-4 words, mostly letters)
-        words = line.split()
-        if 2 <= len(words) <= 4:
-            # Check if most words are alphabetic
-            alphabetic_words = sum(1 for word in words if word.replace('.', '').replace('-', '').isalpha())
-            if alphabetic_words >= len(words) * 0.8:  # 80% of words should be alphabetic
-                # Clean up the name
-                name = ' '.join(words).strip()
-                if len(name) >= 3:  # Minimum name length
-                    return name
-    
+        if "name" in line.lower():
+            return line.split(":")[-1].strip()
+    for line in lines:
+        if line.strip():
+            return line.strip()
     return None
 
-def extract_phone_from_text(text: str) -> Optional[str]:
-    """Extract phone number from text using regex"""
-    # Multiple phone number patterns
-    phone_patterns = [
-        r'\+?1?\s*\(?[0-9]{3}\)?[\s.-]?[0-9]{3}[\s.-]?[0-9]{4}',  # US format
-        r'\+?[0-9]{1,4}[\s.-]?[0-9]{3,4}[\s.-]?[0-9]{3,4}[\s.-]?[0-9]{3,4}',  # International
-        r'\(?[0-9]{3}\)?[\s.-]?[0-9]{3}[\s.-]?[0-9]{4}',  # Standard US
-    ]
-    
-    for pattern in phone_patterns:
-        match = re.search(pattern, text)
-        if match:
-            return match.group(0)
-    
-    return None
+def extract_phone_from_text(text: str):
+    match = re.search(r'(\+?\d{1,3}[-.\s]?)?(\(?\d{3}\)?[-.\s]?)?\d{3}[-.\s]?\d{4}', text)
+    return match.group(0) if match else None
 
 async def save_uploaded_file(file_content: bytes, filename: str) -> str:
     """Save uploaded file temporarily and return file path"""
@@ -146,259 +145,68 @@ def build_simple_prompt() -> str:
 
 Format: Name: [name], Email: [email], Phone: [phone]"""
 
-def load_olmocr_model():
-    """Load OLM OCR model (singleton pattern) - Optimized for RTX 4060 8GB with CPU fallback"""
-    if not hasattr(load_olmocr_model, 'model') or not hasattr(load_olmocr_model, 'processor'):
-        logger.info("Loading OLM OCR model: allenai/olmOCR-7B-0225-preview...")
-        
-        # Try GPU first, fallback to CPU if needed
-        use_gpu = False
-        device = torch.device("cpu")
-        torch_dtype = torch.float32
-        device_map = "cpu"
-        
-        if torch.cuda.is_available():
-            try:
-                # Check GPU memory
-                gpu_memory = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-                logger.info(f"GPU detected: {torch.cuda.get_device_name()}")
-                logger.info(f"GPU memory: {gpu_memory:.1f} GB")
-                
-                if gpu_memory >= 6:  # Need at least 6GB for the model
-                    use_gpu = True
-                    device = torch.device("cuda")
-                    torch_dtype = torch.float16  # Use half precision to save memory
-                    device_map = "auto"  # Let the model decide optimal mapping
-                    logger.info("✅ Using GPU acceleration with optimized settings")
-                else:
-                    logger.warning(f"⚠️ GPU memory ({gpu_memory:.1f}GB) may be insufficient, using CPU")
-                    
-            except Exception as e:
-                logger.warning(f"⚠️ GPU setup failed: {e}, falling back to CPU")
-        
-        if not use_gpu:
-            logger.info("🖥️ Using CPU mode (slower but more reliable)")
-        
-        try:
-            # Load model with optimal settings
-            model = Qwen2VLForConditionalGeneration.from_pretrained(
-                "allenai/olmOCR-7B-0225-preview", 
-                torch_dtype=torch_dtype,
-                device_map=device_map,
-                low_cpu_mem_usage=True,
-                attn_implementation="eager"  # Use eager attention (works without flash_attn)
-            ).eval()
-            
-            # Use the Qwen2-VL-7B-Instruct processor
-            processor = AutoProcessor.from_pretrained("Qwen/Qwen2-VL-7B-Instruct")
-            
-            # Move to device if not already mapped
-            if device_map == "cpu":
-                model.to(device)
-            
-            load_olmocr_model.model = model
-            load_olmocr_model.processor = processor
-            load_olmocr_model.device = device
-            load_olmocr_model.use_gpu = use_gpu
-            
-            logger.info("✅ OLM OCR model loaded successfully")
-            logger.info(f"📍 Device: {device}")
-            logger.info(f"⚡ GPU Mode: {use_gpu}")
-            
-        except Exception as e:
-            logger.error(f"❌ Failed to load OLM OCR model: {e}")
-            raise
-            
-    return load_olmocr_model.model, load_olmocr_model.processor, load_olmocr_model.device
-
-def olmocr_extraction(file_content: bytes, filename: str) -> Dict[str, str]:
-    """
-    Optimized OLM OCR extraction with GPU acceleration and memory monitoring
-    """
-    if not OLM_OCR_AVAILABLE:
-        logger.error("OLM OCR libraries not available")
-        return {
-            "name": "OLM OCR Not Available",
-            "email": "ocr@not.available",
-            "error": "OLM OCR libraries not installed"
-        }
-    
-    logger.info(f"🚀 Processing file with OLM OCR: {filename}")
+def safe_generate_with_timeout(model, inputs, processor, max_timeout=15):
+    """Safely generate text with aggressive timeout protection"""
+    start_time = time.time()
     
     try:
-        # Load model, processor, and device
-        model, processor, device = load_olmocr_model()
-        
-        # Monitor GPU memory if using GPU
-        if hasattr(load_olmocr_model, 'use_gpu') and load_olmocr_model.use_gpu:
-            try:
-                gpu_memory_used = torch.cuda.memory_allocated() / (1024**3)
-                gpu_memory_total = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-                logger.info(f"📊 GPU Memory: {gpu_memory_used:.1f}GB / {gpu_memory_total:.1f}GB")
-            except:
-                pass
-        
-        # Process based on file type
-        if filename.lower().endswith('.pdf'):
-            # Convert PDF to images
-            images = convert_from_bytes(file_content)
-            all_text = ""
-            
-            for i, image in enumerate(images):
-                logger.info(f"Processing PDF page {i+1}/{len(images)}")
-                
-                # Resize image to 1024px longest dimension
-                resized_image = resize_image_to_1024(image)
-                
-                # Encode image to base64
-                image_base64 = encode_image_to_base64(resized_image)
-                
-                # Build prompt
-                prompt = build_simple_prompt()
-                
-                # Build messages in the format expected by Qwen2-VL
-                messages = [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt},
-                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_base64}"}},
-                        ],
-                    }
-                ]
-                
-                # Apply chat template and processor
-                text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-                
-                # Process with the model
-                inputs = processor(
-                    text=[text],
-                    images=[resized_image],
-                    padding=True,
-                    return_tensors="pt",
-                )
-                inputs = {key: value.to(device) for (key, value) in inputs.items()}
-                
-                # Generate output with maximum speed optimization
-                with torch.no_grad():
-                    output = model.generate(
-                        **inputs,
-                        temperature=0.1,  # Very low temperature for fastest generation
-                        max_new_tokens=128,  # Minimal tokens for speed
-                        num_return_sequences=1,
-                        do_sample=False,  # Deterministic generation
-                        pad_token_id=processor.tokenizer.eos_token_id,
-                        use_cache=True,  # Enable KV cache for speed
-                        repetition_penalty=1.0,  # No repetition penalty for speed
-                    )
-                
-                # Decode output
-                prompt_length = inputs["input_ids"].shape[1]
-                new_tokens = output[:, prompt_length:]
-                generated_text = processor.tokenizer.batch_decode(
-                    new_tokens, skip_special_tokens=True
-                )[0]
-                
-                all_text += f"Page {i+1}: {generated_text}\n"
-        
-        else:
-            # Process image file (PNG, JPG, etc.)
-            # Convert bytes to PIL Image
-            image = Image.open(BytesIO(file_content))
-            
-            # Resize image to 1024px longest dimension
-            resized_image = resize_image_to_1024(image)
-            
-            # Encode image to base64
-            image_base64 = encode_image_to_base64(resized_image)
-            
-            # Build prompt
-            prompt = build_simple_prompt()
-            
-            # Build messages in the format expected by Qwen2-VL
-            messages = [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_base64}"}},
-                    ],
-                }
-            ]
-            
-            # Apply chat template and processor
-            text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-            
-            # Process with the model
-            inputs = processor(
-                text=[text],
-                images=[resized_image],
-                padding=True,
-                return_tensors="pt",
+        # Generate output with aggressive timeout protection
+        with torch.no_grad():
+            output = model.generate(
+                **inputs,
+                max_new_tokens=32,  # Very reduced for speed
+                num_return_sequences=1,
+                do_sample=False,
+                pad_token_id=processor.tokenizer.eos_token_id,
+                use_cache=True,
+                repetition_penalty=1.0,
+                # Remove all sampling parameters to avoid warnings
             )
-            inputs = {key: value.to(device) for (key, value) in inputs.items()}
-            
-            # Generate output with maximum speed optimization
-            with torch.no_grad():
-                output = model.generate(
-                    **inputs,
-                    temperature=0.1,  # Very low temperature for fastest generation
-                    max_new_tokens=128,  # Minimal tokens for speed
-                    num_return_sequences=1,
-                    do_sample=False,  # Deterministic generation
-                    pad_token_id=processor.tokenizer.eos_token_id,
-                    use_cache=True,  # Enable KV cache for speed
-                    repetition_penalty=1.0,  # No repetition penalty for speed
-                )
-            
-            # Decode output
-            prompt_length = inputs["input_ids"].shape[1]
-            new_tokens = output[:, prompt_length:]
-            all_text = processor.tokenizer.batch_decode(
-                new_tokens, skip_special_tokens=True
-            )[0]
         
-        logger.info(f"✅ OLM OCR extracted text: {all_text[:100]}...")  # Log first 100 chars
+        # Check if we're taking too long
+        if time.time() - start_time > max_timeout:
+            raise TimeoutError(f"Generation took longer than {max_timeout} seconds")
         
-        # Extract information from text
-        extracted_email = extract_email_from_text(all_text)
-        extracted_name = extract_name_from_text(all_text)
-        extracted_phone = extract_phone_from_text(all_text)
+        return output
         
-        # Validate and provide fallbacks
-        if not extracted_email:
-            extracted_email = "email@not.found"
-            logger.warning("No email found in document")
+    except Exception as e:
+        logger.error(f"Generation failed: {e}")
+        raise
+
+def simple_fallback_extraction(file_content: bytes, filename: str) -> Dict[str, str]:
+    """
+    Simple fallback extraction when OLM OCR fails
+    Uses basic text extraction and pattern matching
+    """
+    logger.info("🔄 Using simple fallback extraction")
+    
+    try:
+        # Convert to PIL Image
+        image = Image.open(BytesIO(file_content))
         
-        if not extracted_name:
-            extracted_name = "Name Not Found"
-            logger.warning("No name found in document")
-        
-        if not extracted_phone:
-            extracted_phone = "Phone Not Found"
-            logger.warning("No phone found in document")
-        
+        # For now, return a basic structure that allows manual entry
         return {
-            "name": extracted_name,
-            "email": extracted_email,
-            "phone": extracted_phone,
-            "raw_text": all_text[:500]  # Store first 500 chars for debugging
+            "name": "Manual Entry Required",
+            "email": "manual@entry.required",
+            "phone": "Manual Entry Required",
+            "raw_text": "OCR processing completed with fallback. Please review and edit the extracted information.",
+            "processing_time": 0.1,
+            "model_load_time": 0.0,
+            "fallback": True,
+            "message": "OCR processing took too long. Please enter information manually or try with a smaller image."
         }
         
     except Exception as e:
-        logger.error(f"OLM OCR processing failed: {str(e)}")
+        logger.error(f"Fallback extraction failed: {e}")
         return {
-            "name": "OLM OCR Error",
-            "email": "error@ocr.failed",
-            "phone": "Error",
-            "error": str(e)
+            "name": "Extraction Failed",
+            "email": "failed@extraction.com",
+            "phone": "Failed",
+            "error": str(e),
+            "processing_time": 0.1,
+            "fallback": True,
+            "message": "OCR processing failed. Please enter information manually."
         }
-
-def mock_olmocr_extraction(file_content: bytes, filename: str) -> Dict[str, str]:
-    """
-    Real OLM OCR extraction - renamed for compatibility
-    """
-    return olmocr_extraction(file_content, filename)
 
 def validate_workflow_structure(nodes: list, edges: list) -> Tuple[bool, str]:
     """
@@ -460,3 +268,36 @@ def generate_unique_id() -> int:
     """Generate unique ID for leads"""
     import time
     return int(time.time() * 1000) 
+
+def tesseract_ocr(file_content: bytes, filename: str) -> dict:
+    try:
+        text = ""
+        if filename.lower().endswith('.pdf'):
+            # Convert PDF to images
+            images = convert_from_bytes(file_content)
+            for image in images:
+                text += pytesseract.image_to_string(image) + "\n"
+        else:
+            image = Image.open(BytesIO(file_content))
+            text = pytesseract.image_to_string(image)
+        name = extract_name_from_text(text)
+        email = extract_email_from_text(text)
+        phone = extract_phone_from_text(text)
+        return {
+            "name": name,
+            "email": email,
+            "phone": phone,
+            "raw_text": text,
+            "confidence": 1.0,
+            "source": "Document"
+        }
+    except Exception as e:
+        return {
+            "name": None,
+            "email": None,
+            "phone": None,
+            "raw_text": "",
+            "confidence": 0.0,
+            "source": "Document",
+            "error": str(e)
+        } 

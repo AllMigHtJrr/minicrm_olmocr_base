@@ -1,44 +1,148 @@
 {
   "workflows": [
     {
-      "id": "workflow-1",
-      "name": "Default Lead Follow-up",
-      "description": "Automated follow-up workflow for new leads",
+      "id": "workflow-1752189712179",
+      "name": "Workflow 1752189712175",
+      "description": "Automated workflow for lead management",
       "nodes": [
         {
           "id": "trigger-1",
           "type": "trigger",
-          "position": {"x": 100, "y": 100},
-          "data": {"label": "Lead Created"}
+          "position": {
+            "x": 400.0,
+            "y": 100.0
+          },
+          "data": {
+            "type": "trigger",
+            "label": "Lead Created",
+            "configured": true
+          }
         },
         {
-          "id": "action-1",
-          "type": "action",
-          "position": {"x": 300, "y": 100},
-          "data": {"label": "Send Welcome Email"}
+          "id": "sendEmail-2",
+          "type": "sendEmail",
+          "position": {
+            "x": 523.0,
+            "y": 303.0
+          },
+          "data": {
+            "type": "sendEmail",
+            "id": "send-email",
+            "label": "Send Email",
+            "icon": "Mail",
+            "color": "bg-blue-500",
+            "description": "Send automated email to lead",
+            "configured": true,
+            "emailSubject": "Proj Demo",
+            "emailTemplate": "Welcome to our project Demo!",
+            "senderName": "Vineeth"
+          }
         },
         {
-          "id": "action-2",
-          "type": "action",
-          "position": {"x": 500, "y": 100},
-          "data": {"label": "Update Status to Contacted"}
+          "id": "updateStatus-3",
+          "type": "updateStatus",
+          "position": {
+            "x": 536.0,
+            "y": 502.0
+          },
+          "data": {
+            "type": "updateStatus",
+            "id": "update-status",
+            "label": "Update Status",
+            "icon": "RefreshCw",
+            "color": "bg-green-500",
+            "description": "Change lead status",
+            "configured": false
+          }
         }
       ],
       "edges": [
         {
-          "id": "edge-1",
+          "id": "edge-1752187563229",
           "source": "trigger-1",
-          "target": "action-1"
+          "target": "sendEmail-2"
         },
         {
-          "id": "edge-2",
-          "source": "action-1",
-          "target": "action-2"
+          "id": "edge-1752187566141",
+          "source": "sendEmail-2",
+          "target": "updateStatus-3"
         }
       ],
-      "created_at": "2024-01-15T10:00:00",
-      "updated_at": "2024-01-15T10:00:00"
+      "created_at": "2025-07-11T04:51:52.179639",
+      "updated_at": "2025-07-11T04:51:52.179639"
+    },
+    {
+      "id": "workflow-1752239064065",
+      "name": "Workflow 1752239064055",
+      "description": "Automated workflow for lead management",
+      "nodes": [
+        {
+          "id": "trigger-1",
+          "type": "trigger",
+          "position": {
+            "x": 400.0,
+            "y": 100.0
+          },
+          "data": {
+            "type": "trigger",
+            "label": "Lead Created",
+            "configured": true
+          }
+        },
+        {
+          "id": "sendEmail-2",
+          "type": "sendEmail",
+          "position": {
+            "x": 523.0,
+            "y": 303.0
+          },
+          "data": {
+            "type": "sendEmail",
+            "id": "send-email",
+            "label": "Send Email",
+            "icon": "Mail",
+            "color": "bg-blue-500",
+            "description": "Send automated email to lead",
+            "configured": true,
+            "emailSubject": "Proj Demo",
+            "emailTemplate": "Welcome to our project Demo!",
+            "senderName": "Vineeth"
+          }
+        },
+        {
+          "id": "updateStatus-3",
+          "type": "updateStatus",
+          "position": {
+            "x": 536.0,
+            "y": 502.0
+          },
+          "data": {
+            "type": "updateStatus",
+            "id": "update-status",
+            "label": "Update Status",
+            "icon": "RefreshCw",
+            "color": "bg-green-500",
+            "description": "Change lead status",
+            "configured": true,
+            "status": "Contacted"
+          }
+        }
+      ],
+      "edges": [
+        {
+          "id": "edge-1752187563229",
+          "source": "trigger-1",
+          "target": "sendEmail-2"
+        },
+        {
+          "id": "edge-1752187566141",
+          "source": "sendEmail-2",
+          "target": "updateStatus-3"
+        }
+      ],
+      "created_at": "2025-07-11T18:34:25.259226",
+      "updated_at": "2025-07-11T18:34:25.259226"
     }
   ],
-  "last_updated": "2024-01-15T10:00:00"
-} 
+  "last_updated": "2025-07-11T18:34:29.705180"
+}
