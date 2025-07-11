@@ -22,6 +22,5 @@ sentencepiece==0.1.99
 protobuf==3.20.3
 # Force specific versions to avoid conflicts
 typing-extensions==4.8.0 
-pytesseract
-pillow
+pytesseract==0.3.10
 sendgrid==6.10.0 

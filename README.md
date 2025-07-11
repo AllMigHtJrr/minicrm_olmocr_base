@@ -32,6 +32,8 @@ A modern, full-stack CRM application with AI-powered document processing using O
 - **Transformers** (Hugging Face)
 - **OLM OCR** for document processing
 - **Uvicorn** ASGI server
+- **SendGrid** for transactional email
+- **pytesseract** for Tesseract OCR integration
 
 ## 📋 Prerequisites
 
@@ -68,8 +70,6 @@ venv\Scripts\activate  # Windows
 #### Install Dependencies
 ```bash
 pip install -r requirements.txt
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-pip install transformers==4.47.1 pdf2image opencv-python accelerate
 ```
 
 #### Test OLM OCR Setup
@@ -78,22 +78,22 @@ python test_optimized_ocr.py
 ```
 
 #### Start Backend Server
-```bash
+   ```bash
 uvicorn main:app --host 0.0.0.0 --port 8001 --reload
-```
+   ```
 
 ### 3. Frontend Setup
 
 #### Install Dependencies
-```bash
+   ```bash
 cd ..
-npm install
-```
+   npm install
+   ```
 
 #### Start Development Server
-```bash
+   ```bash
 npm run dev
-```
+   ```
 
 ### 4. Access the Application
 - **Frontend**: http://localhost:3000 (or port shown in terminal)
